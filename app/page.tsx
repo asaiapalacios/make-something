@@ -253,6 +253,9 @@ export default function Home() {
   const cancelButtonClass = isDark
     ? "bg-zinc-600/70 !text-zinc-100 hover:bg-zinc-500"
     : "bg-zinc-200 text-zinc-700 hover:bg-zinc-300";
+  const confirmDeleteClass = isDark
+    ? "bg-rose-300 text-zinc-900 border border-rose-100/80 hover:bg-rose-200"
+    : "bg-rose-500 text-white hover:bg-rose-600";
   const timerProgressColor = "default";
   const timerProgressClass = isDark ? "bg-zinc-300" : "bg-zinc-500";
   const timerTrackClass = isDark ? "bg-zinc-700/70" : "";
@@ -289,7 +292,7 @@ export default function Home() {
       date: new Date().toLocaleDateString(),
       effort,
       notes,
-      rounds: roundsDone,
+      rounds: Math.max(1, roundsDone),
       targetRounds: totalRounds,
     };
     setLogs((prev) => [next, ...prev].slice(0, 8));
@@ -715,8 +718,8 @@ export default function Home() {
                       <span className={`text-xs ${subClass}`}>remove note?</span>
                       <Button
                         size="sm"
-                        color="danger"
-                        variant="flat"
+                        variant="solid"
+                        className={confirmDeleteClass}
                         onPress={() => deleteSession(log.id)}
                       >
                         yes
