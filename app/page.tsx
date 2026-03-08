@@ -31,7 +31,7 @@ const DEFAULT_ROUNDS = 5;
 const SPRINT_SECONDS = 20;
 const MIN_REST_SECONDS = 40;
 const MAX_REST_SECONDS = 180;
-const MIN_ROUNDS = 3;
+const MIN_ROUNDS = 1;
 const MAX_ROUNDS = 12;
 const MIN_EFFORT = 1;
 const MAX_EFFORT = 10;
@@ -242,7 +242,7 @@ export default function Home() {
     ? "bg-rose-400/25 text-rose-100 border border-rose-300/60 hover:bg-rose-400/35"
     : "";
   const sessionItemClass = isDark
-    ? "border border-zinc-100/80"
+    ? "border border-zinc-400/80"
     : "border border-zinc-500";
   const unselectedDayClass = isDark
     ? "bg-zinc-600/70 text-zinc-100 hover:bg-zinc-500/80"
@@ -408,7 +408,7 @@ export default function Home() {
             treadmill sprint planner
           </h1>
           <p className={`mt-2 text-base sm:text-lg ${subClass}`}>
-            for non-lifting days. 20s sprint + rest, 5+ rounds total.
+            for non-lifting days. 20s sprint + rest, 5+ rounds.
           </p>
         </div>
 
