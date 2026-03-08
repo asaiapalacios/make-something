@@ -13,7 +13,7 @@ import {
   Tooltip,
 } from "@heroui/react";
 import { motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Phase = "ready" | "sprint" | "rest" | "done";
 
@@ -35,6 +35,8 @@ const MIN_ROUNDS = 1;
 const MAX_ROUNDS = 12;
 const MIN_EFFORT = 1;
 const MAX_EFFORT = 10;
+const SWIPE_TRIGGER_PX = 70;
+const SWIPE_MAX_LEFT_PX = -120;
 
 function clampRounds(value: number) {
   return Math.min(MAX_ROUNDS, Math.max(MIN_ROUNDS, Math.round(value)));
@@ -107,10 +109,24 @@ export default function Home() {
   const [logs, setLogs] = useState<SessionLog[]>(initialPrefs.logs);
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editingNoteValue, setEditingNoteValue] = useState("");
-  const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const [swipeOffsets, setSwipeOffsets] = useState<Record<number, number>>({});
   const [activeSwipeId, setActiveSwipeId] = useState<number | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const swipeRef = useRef<{
+    id: number | null;
+    startX: number;
+    startY: number;
+    horizontalLocked: boolean;
+    pendingOffset: number;
+    rafId: number | null;
+  }>({
+    id: null,
+    startX: 0,
+    startY: 0,
+    horizontalLocked: false,
+    pendingOffset: 0,
+    rafId: null,
+  });
 
   const currentRest = Number(restSeconds) || 90;
   const intervalTotalSeconds = phase === "rest" ? currentRest : SPRINT_SECONDS;
@@ -331,27 +347,79 @@ export default function Home() {
     setPendingDeleteId((prev) => (prev === id ? null : prev));
   };
 
-  const startSwipe = (id: number, clientX: number) => {
-    setTouchStartX(clientX);
+  const startSwipe = (id: number, clientX: number, clientY: number) => {
+    if (swipeRef.current.rafId !== null) {
+      window.cancelAnimationFrame(swipeRef.current.rafId);
+    }
+    swipeRef.current = {
+      id,
+      startX: clientX,
+      startY: clientY,
+      horizontalLocked: false,
+      pendingOffset: 0,
+      rafId: null,
+    };
     setActiveSwipeId(id);
     setSwipeOffsets((prev) => ({ ...prev, [id]: 0 }));
   };
 
-  const moveSwipe = (id: number, clientX: number) => {
-    if (touchStartX === null) return;
-    const delta = clientX - touchStartX;
-    const offset = Math.max(-120, Math.min(0, delta));
-    setSwipeOffsets((prev) => ({ ...prev, [id]: offset }));
+  const moveSwipe = (
+    id: number,
+    clientX: number,
+    clientY: number,
+    event: React.TouchEvent<HTMLDivElement>,
+  ) => {
+    const swipe = swipeRef.current;
+    if (swipe.id !== id) return;
+
+    const deltaX = clientX - swipe.startX;
+    const deltaY = clientY - swipe.startY;
+
+    if (!swipe.horizontalLocked) {
+      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > Math.abs(deltaX)) {
+        setActiveSwipeId(null);
+        swipeRef.current.id = null;
+        return;
+      }
+      if (Math.abs(deltaX) < 8) return;
+      swipe.horizontalLocked = true;
+    }
+
+    if (event.cancelable) event.preventDefault();
+    swipe.pendingOffset = Math.max(SWIPE_MAX_LEFT_PX, Math.min(0, deltaX));
+
+    if (swipe.rafId === null) {
+      swipe.rafId = window.requestAnimationFrame(() => {
+        const nextOffset = swipeRef.current.pendingOffset;
+        setSwipeOffsets((prev) => ({ ...prev, [id]: nextOffset }));
+        swipeRef.current.rafId = null;
+      });
+    }
   };
 
   const endSwipe = (id: number) => {
-    const offset = swipeOffsets[id] ?? 0;
-    if (offset <= -70) {
+    const swipe = swipeRef.current;
+    if (swipe.id !== id) return;
+
+    if (swipe.rafId !== null) {
+      window.cancelAnimationFrame(swipe.rafId);
+      swipe.rafId = null;
+    }
+
+    const offset = swipe.pendingOffset;
+    if (offset <= -SWIPE_TRIGGER_PX) {
       setPendingDeleteId(id);
     }
     setSwipeOffsets((prev) => ({ ...prev, [id]: 0 }));
     setActiveSwipeId(null);
-    setTouchStartX(null);
+    swipeRef.current = {
+      id: null,
+      startX: 0,
+      startY: 0,
+      horizontalLocked: false,
+      pendingOffset: 0,
+      rafId: null,
+    };
   };
 
   const adjustRestSeconds = (delta: number) => {
@@ -662,9 +730,14 @@ export default function Home() {
                       : "transition-transform duration-200 ease-out"
                   } ${sessionItemClass}`}
                   style={{ transform: `translateX(${swipeOffsets[log.id] ?? 0}px)` }}
-                  onTouchStart={(event) => startSwipe(log.id, event.touches[0].clientX)}
-                  onTouchMove={(event) => moveSwipe(log.id, event.touches[0].clientX)}
+                  onTouchStart={(event) =>
+                    startSwipe(log.id, event.touches[0].clientX, event.touches[0].clientY)
+                  }
+                  onTouchMove={(event) =>
+                    moveSwipe(log.id, event.touches[0].clientX, event.touches[0].clientY, event)
+                  }
                   onTouchEnd={() => endSwipe(log.id)}
+                  onTouchCancel={() => endSwipe(log.id)}
                 >
                   <p className={`text-sm font-medium ${sectionTitleClass}`}>
                     {log.date} • rounds: {log.rounds}/{log.targetRounds || DEFAULT_ROUNDS} • effort: {log.effort || "n/a"}
