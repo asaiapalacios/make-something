@@ -109,9 +109,9 @@ export default function Home() {
   const [editingNoteValue, setEditingNoteValue] = useState("");
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const [swipeOffsets, setSwipeOffsets] = useState<Record<number, number>>({});
+  const [activeSwipeId, setActiveSwipeId] = useState<number | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
 
-  const roundsDone = phase === "done" ? totalRounds : Math.max(0, round - 1);
   const currentRest = Number(restSeconds) || 90;
   const intervalTotalSeconds = phase === "rest" ? currentRest : SPRINT_SECONDS;
   const intervalProgressValue =
@@ -287,12 +287,15 @@ export default function Home() {
   };
 
   const saveSession = () => {
+    const roundSnapshot =
+      phase === "done" ? totalRounds : Math.min(Math.max(round, 1), totalRounds);
+
     const next: SessionLog = {
       id: Date.now(),
       date: new Date().toLocaleDateString(),
       effort,
       notes,
-      rounds: Math.max(1, roundsDone),
+      rounds: roundSnapshot,
       targetRounds: totalRounds,
     };
     setLogs((prev) => [next, ...prev].slice(0, 8));
@@ -330,6 +333,7 @@ export default function Home() {
 
   const startSwipe = (id: number, clientX: number) => {
     setTouchStartX(clientX);
+    setActiveSwipeId(id);
     setSwipeOffsets((prev) => ({ ...prev, [id]: 0 }));
   };
 
@@ -346,6 +350,7 @@ export default function Home() {
       setPendingDeleteId(id);
     }
     setSwipeOffsets((prev) => ({ ...prev, [id]: 0 }));
+    setActiveSwipeId(null);
     setTouchStartX(null);
   };
 
@@ -651,7 +656,11 @@ export default function Home() {
               logs.map((log) => (
                 <div
                   key={log.id}
-                  className={`rounded-xl p-3 transition-transform ${sessionItemClass}`}
+                  className={`rounded-xl p-3 will-change-transform ${
+                    activeSwipeId === log.id
+                      ? "transition-none"
+                      : "transition-transform duration-200 ease-out"
+                  } ${sessionItemClass}`}
                   style={{ transform: `translateX(${swipeOffsets[log.id] ?? 0}px)` }}
                   onTouchStart={(event) => startSwipe(log.id, event.touches[0].clientX)}
                   onTouchMove={(event) => moveSwipe(log.id, event.touches[0].clientX)}
