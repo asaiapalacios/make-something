@@ -13,7 +13,7 @@ import {
   Tooltip,
 } from "@heroui/react";
 import { motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Phase = "ready" | "sprint" | "rest" | "done";
 
@@ -27,6 +27,7 @@ type SessionLog = {
 };
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const STORAGE_KEY = "sprint-planner-v1";
 const DEFAULT_ROUNDS = 5;
 const SPRINT_SECONDS = 20;
 const MIN_REST_SECONDS = 40;
@@ -49,69 +50,69 @@ function prettyPhase(phase: Phase) {
   return "done";
 }
 
-export default function Home() {
-  const initialPrefs = useMemo(() => {
-    if (typeof window === "undefined") {
-      return {
-        isDark: false,
-        restSeconds: "90",
-        totalRounds: DEFAULT_ROUNDS,
-        plannedDays: ["tue", "thu"],
-        logs: [] as SessionLog[],
-      };
-    }
-    const saved = localStorage.getItem("sprint-planner-v1");
-    if (!saved) {
-      return {
-        isDark: false,
-        restSeconds: "90",
-        totalRounds: DEFAULT_ROUNDS,
-        plannedDays: ["tue", "thu"],
-        logs: [] as SessionLog[],
-      };
-    }
-    try {
-      const parsed = JSON.parse(saved) as {
-        isDark?: boolean;
-        restSeconds?: string;
-        totalRounds?: number;
-        plannedDays?: string[];
-        logs?: SessionLog[];
-      };
-      return {
-        isDark: Boolean(parsed.isDark),
-        restSeconds: parsed.restSeconds || "90",
-        totalRounds: clampRounds(parsed.totalRounds || DEFAULT_ROUNDS),
-        plannedDays: parsed.plannedDays?.length ? parsed.plannedDays : ["tue", "thu"],
-        logs: parsed.logs?.length ? parsed.logs : [],
-      };
-    } catch {
-      return {
-        isDark: false,
-        restSeconds: "90",
-        totalRounds: DEFAULT_ROUNDS,
-        plannedDays: ["tue", "thu"],
-        logs: [] as SessionLog[],
-      };
-    }
-  }, []);
+function isSessionLog(value: unknown): value is SessionLog {
+  if (!value || typeof value !== "object") return false;
+  const v = value as SessionLog;
+  return (
+    typeof v.id === "number" &&
+    typeof v.date === "string" &&
+    typeof v.effort === "string" &&
+    typeof v.notes === "string" &&
+    typeof v.rounds === "number"
+  );
+}
 
-  const [isDark, setIsDark] = useState(initialPrefs.isDark);
-  const [restSeconds, setRestSeconds] = useState(initialPrefs.restSeconds);
-  const [totalRounds, setTotalRounds] = useState(initialPrefs.totalRounds);
-  const [plannedDays, setPlannedDays] = useState<string[]>(initialPrefs.plannedDays);
+function formatShortDate(date: Date) {
+  // "3/10/26" (mm/dd/yy with no leading zeros)
+  return date.toLocaleDateString("en-US", {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+  });
+}
+
+function normalizeShortDate(input: string) {
+  const value = input.trim();
+  if (!value) return value;
+
+  // already mm/dd/yy
+  if (/^\d{1,2}\/\d{1,2}\/\d{2}$/.test(value)) return value;
+
+  // mm/dd/yyyy -> mm/dd/yy
+  const mdy4 = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy4) return `${mdy4[1]}/${mdy4[2]}/${mdy4[3].slice(-2)}`;
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) return formatShortDate(parsed);
+
+  // fallback: keep whatever we have
+  return value;
+}
+
+export default function Home() {
+  // keep the first render deterministic to avoid hydration mismatches
+  // (server HTML must match the browser's first render).
+  const [hydrated, setHydrated] = useState(false);
+
+  const [isDark, setIsDark] = useState(false);
+  const [restSeconds, setRestSeconds] = useState("90");
+  const [totalRounds, setTotalRounds] = useState(DEFAULT_ROUNDS);
+  const [plannedDays, setPlannedDays] = useState<string[]>(["tue", "thu"]);
   const [phase, setPhase] = useState<Phase>("ready");
   const [round, setRound] = useState(1);
   const [secondsLeft, setSecondsLeft] = useState(SPRINT_SECONDS);
   const [running, setRunning] = useState(false);
   const [effort, setEffort] = useState("");
   const [notes, setNotes] = useState("");
-  const [logs, setLogs] = useState<SessionLog[]>(initialPrefs.logs);
+  const [logs, setLogs] = useState<SessionLog[]>([]);
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editingNoteValue, setEditingNoteValue] = useState("");
+  const [noteSavedForId, setNoteSavedForId] = useState<number | null>(null);
+  const [todayLabel, setTodayLabel] = useState("");
   const [swipeOffsets, setSwipeOffsets] = useState<Record<number, number>>({});
   const [activeSwipeId, setActiveSwipeId] = useState<number | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const noteSavedTimerRef = useRef<number | null>(null);
   const swipeRef = useRef<{
     id: number | null;
     startX: number;
@@ -200,11 +201,76 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    // hydrate prefs from localStorage after mount (keeps server/client first render identical)
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as {
+          isDark?: unknown;
+          restSeconds?: unknown;
+          totalRounds?: unknown;
+          plannedDays?: unknown;
+          logs?: unknown;
+        };
+
+        if (typeof parsed.isDark !== "undefined") setIsDark(Boolean(parsed.isDark));
+
+        const rawRest =
+          typeof parsed.restSeconds === "string"
+            ? parsed.restSeconds
+            : String(parsed.restSeconds ?? "");
+        const digits = rawRest.replace(/[^\d]/g, "");
+        if (digits) {
+          const n = Number(digits);
+          if (!Number.isNaN(n)) {
+            setRestSeconds(String(Math.min(MAX_REST_SECONDS, Math.max(MIN_REST_SECONDS, n))));
+          }
+        }
+
+        const rounds = Number(parsed.totalRounds);
+        if (!Number.isNaN(rounds) && rounds > 0) {
+          setTotalRounds(clampRounds(rounds));
+        }
+
+        if (Array.isArray(parsed.plannedDays)) {
+          const next = parsed.plannedDays
+            .filter((d): d is string => typeof d === "string")
+            .map((d) => d.toLowerCase().trim())
+            .filter((d) => DAYS.includes(d));
+          if (next.length) setPlannedDays(Array.from(new Set(next)));
+        }
+
+        if (Array.isArray(parsed.logs)) {
+          setLogs(
+            parsed.logs
+              .filter(isSessionLog)
+              .slice(0, 8)
+              .map((log) => ({ ...log, date: normalizeShortDate(log.date) })),
+          );
+        }
+      }
+    } catch {
+      // ignore corrupt storage
+    } finally {
+      setHydrated(true);
+    }
+
+    setTodayLabel(
+      new Date().toLocaleDateString(undefined, {
+        weekday: "long",
+        month: "short",
+        day: "numeric",
+      }),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
     localStorage.setItem(
-      "sprint-planner-v1",
+      STORAGE_KEY,
       JSON.stringify({ isDark, restSeconds, totalRounds, plannedDays, logs }),
     );
-  }, [isDark, restSeconds, totalRounds, plannedDays, logs]);
+  }, [hydrated, isDark, restSeconds, totalRounds, plannedDays, logs]);
 
   useEffect(() => {
     if (!running) return;
@@ -239,7 +305,15 @@ export default function Home() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [running, phase, round, currentRest, totalRounds, playCountdownCue, playTimeUpCue]);
+  }, [
+    running,
+    phase,
+    round,
+    currentRest,
+    totalRounds,
+    playCountdownCue,
+    playTimeUpCue,
+  ]);
 
   const headerClass = isDark ? "text-zinc-100" : "text-zinc-800";
   const subClass = isDark ? "text-zinc-300" : "text-zinc-600";
@@ -269,9 +343,7 @@ export default function Home() {
   const cancelButtonClass = isDark
     ? "bg-zinc-600/70 !text-zinc-100 hover:bg-zinc-500"
     : "bg-zinc-200 text-zinc-700 hover:bg-zinc-300";
-  const confirmDeleteClass = isDark
-    ? "bg-rose-300 text-zinc-900 border border-rose-100/80 hover:bg-rose-200"
-    : "bg-rose-500 text-white hover:bg-rose-600";
+  const confirmDeleteClass = "bg-rose-500 text-white hover:bg-rose-600 !border-none";
   const timerProgressColor = "default";
   const timerProgressClass = isDark ? "bg-zinc-300" : "bg-zinc-500";
   const timerTrackClass = isDark ? "bg-zinc-700/70" : "";
@@ -284,9 +356,11 @@ export default function Home() {
         ? isDark
           ? "bg-[oklch(0.8467_0.1011_58.24/0.24)] text-[oklch(0.95_0.03_58.24)] border border-[oklch(0.8467_0.1011_58.24/0.5)]"
           : "bg-[oklch(0.8467_0.1011_58.24/0.3)] text-zinc-900 border border-[oklch(0.72_0.09_58.24/0.6)]"
-      : isDark
-        ? "bg-zinc-600/55 text-zinc-100 border border-zinc-300/50"
+        : isDark
+          ? "bg-zinc-600/55 text-zinc-100 border border-zinc-300/50"
         : "bg-zinc-200 text-zinc-800 border border-zinc-400/80";
+
+  const canSaveSession = effort.trim().length > 0 || notes.trim().length > 0;
 
   const startSession = () => {
     setPhase("sprint");
@@ -303,14 +377,22 @@ export default function Home() {
   };
 
   const saveSession = () => {
+    const nextEffort = effort.trim();
+    const nextNotes = notes.trim();
+
+    // don't create empty entries in recent sessions
+    if (nextEffort.length === 0 && nextNotes.length === 0) return;
+
     const roundSnapshot =
-      phase === "done" ? totalRounds : Math.min(Math.max(round, 1), totalRounds);
+      phase === "done"
+        ? totalRounds
+        : Math.min(Math.max(round, 1), totalRounds);
 
     const next: SessionLog = {
       id: Date.now(),
-      date: new Date().toLocaleDateString(),
-      effort,
-      notes,
+      date: formatShortDate(new Date()),
+      effort: nextEffort,
+      notes: nextNotes,
       rounds: roundSnapshot,
       targetRounds: totalRounds,
     };
@@ -331,11 +413,24 @@ export default function Home() {
 
   const saveEditingSessionNote = () => {
     if (editingNoteId === null) return;
+    const savedId = editingNoteId;
+
     setLogs((prev) =>
-      prev.map((log) => (log.id === editingNoteId ? { ...log, notes: editingNoteValue } : log)),
+      prev.map((log) =>
+        log.id === editingNoteId ? { ...log, notes: editingNoteValue } : log,
+      ),
     );
     setEditingNoteId(null);
     setEditingNoteValue("");
+
+    setNoteSavedForId(savedId);
+    if (noteSavedTimerRef.current !== null) {
+      window.clearTimeout(noteSavedTimerRef.current);
+    }
+    noteSavedTimerRef.current = window.setTimeout(() => {
+      setNoteSavedForId(null);
+      noteSavedTimerRef.current = null;
+    }, 1600);
   };
 
   const deleteSession = (id: number) => {
@@ -424,7 +519,10 @@ export default function Home() {
 
   const adjustRestSeconds = (delta: number) => {
     const current = Number(restSeconds) || 90;
-    const next = Math.min(MAX_REST_SECONDS, Math.max(MIN_REST_SECONDS, current + delta));
+    const next = Math.min(
+      MAX_REST_SECONDS,
+      Math.max(MIN_REST_SECONDS, current + delta),
+    );
     setRestSeconds(String(next));
   };
 
@@ -437,14 +535,6 @@ export default function Home() {
     const next = Math.min(MAX_EFFORT, Math.max(MIN_EFFORT, current + delta));
     setEffort(String(next));
   };
-
-  const todayLabel = useMemo(() => {
-    return new Date().toLocaleDateString(undefined, {
-      weekday: "long",
-      month: "short",
-      day: "numeric",
-    });
-  }, []);
 
   return (
     <div
@@ -469,7 +559,8 @@ export default function Home() {
               wrapper: isDark
                 ? "border border-zinc-400/80 bg-zinc-700 group-data-[selected=true]:bg-[#7ef55a]"
                 : "border border-zinc-500 bg-white group-data-[selected=true]:bg-[#7ef55a]",
-              thumb: "bg-zinc-900 w-4 h-4 min-w-4 min-h-4 rounded-full shadow-none",
+              thumb:
+                "bg-zinc-900 w-4 h-4 min-w-4 min-h-4 rounded-full shadow-none",
               label: `text-xs ${isDark ? "text-zinc-100" : "text-zinc-800"}`,
             }}
           >
@@ -484,16 +575,18 @@ export default function Home() {
             treadmill sprint planner
           </h1>
           <p className={`mt-2 text-base sm:text-lg ${subClass}`}>
-            for non-lifting days. 20s sprint + rest, 5+ rounds.
+            for non-lifting days. 20s sprint + rest, 5+ rounds
           </p>
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
           <Card shadow="sm" className={cardClass}>
-            <CardHeader className={`pb-0 ${sectionTitleClass}`}>weekly off-day plan</CardHeader>
+            <CardHeader className={`pb-0 ${sectionTitleClass}`}>
+              weekly off-day plan
+            </CardHeader>
             <CardBody className="gap-3">
               <p className={`text-sm ${subClass}`}>
-                pick the days you want sprint sessions.
+                pick the days you want sprint sessions
               </p>
               <div className="flex flex-wrap gap-2 overflow-x-hidden">
                 {DAYS.map((day) => {
@@ -533,19 +626,28 @@ export default function Home() {
                   }
                   const parsed = Number(digitsOnly);
                   if (Number.isNaN(parsed)) return;
-                  setRestSeconds(String(Math.min(MAX_REST_SECONDS, Math.max(MIN_REST_SECONDS, parsed))));
+                  setRestSeconds(
+                    String(
+                      Math.min(
+                        MAX_REST_SECONDS,
+                        Math.max(MIN_REST_SECONDS, parsed),
+                      ),
+                    ),
+                  );
                 }}
                 inputMode="numeric"
                 classNames={{
-                  inputWrapper: isDark ? "" : "border border-zinc-300 bg-white/80",
+                  inputWrapper: isDark
+                    ? ""
+                    : "border border-zinc-300 bg-white/80",
                 }}
                 endContent={
                   <div className="flex items-center gap-1">
                     <Button
                       isIconOnly
-                      size="sm"
+                      size="md"
                       variant="flat"
-                      className={resetButtonClass}
+                      className={`${resetButtonClass} w-10 min-w-10 h-10 text-lg`}
                       aria-label="decrease rest seconds"
                       onPress={() => adjustRestSeconds(-5)}
                     >
@@ -553,9 +655,9 @@ export default function Home() {
                     </Button>
                     <Button
                       isIconOnly
-                      size="sm"
+                      size="md"
                       variant="flat"
-                      className={resetButtonClass}
+                      className={`${resetButtonClass} w-10 min-w-10 h-10 text-lg`}
                       aria-label="increase rest seconds"
                       onPress={() => adjustRestSeconds(5)}
                     >
@@ -577,15 +679,17 @@ export default function Home() {
                 }}
                 inputMode="numeric"
                 classNames={{
-                  inputWrapper: isDark ? "" : "border border-zinc-300 bg-white/80",
+                  inputWrapper: isDark
+                    ? ""
+                    : "border border-zinc-300 bg-white/80",
                 }}
                 endContent={
                   <div className="flex items-center gap-1">
                     <Button
                       isIconOnly
-                      size="sm"
+                      size="md"
                       variant="flat"
-                      className={resetButtonClass}
+                      className={`${resetButtonClass} w-10 min-w-10 h-10 text-lg`}
                       aria-label="decrease total rounds"
                       onPress={() => adjustTotalRounds(-1)}
                     >
@@ -593,9 +697,9 @@ export default function Home() {
                     </Button>
                     <Button
                       isIconOnly
-                      size="sm"
+                      size="md"
                       variant="flat"
-                      className={resetButtonClass}
+                      className={`${resetButtonClass} w-10 min-w-10 h-10 text-lg`}
                       aria-label="increase total rounds"
                       onPress={() => adjustTotalRounds(1)}
                     >
@@ -608,7 +712,9 @@ export default function Home() {
           </Card>
 
           <Card shadow="sm" className={cardClass}>
-            <CardHeader className={`pb-0 ${sectionTitleClass}`}>interval timer</CardHeader>
+            <CardHeader className={`pb-0 ${sectionTitleClass}`}>
+              interval timer
+            </CardHeader>
             <CardBody className="gap-4">
               <div className="flex items-center justify-between">
                 <Chip variant="flat" className={phaseChipClass}>
@@ -618,18 +724,26 @@ export default function Home() {
                   round {Math.min(round, totalRounds)} / {totalRounds}
                 </p>
               </div>
-              <p className={`text-center text-6xl font-semibold ${headerClass}`}>
+              <p
+                className={`text-center text-6xl font-semibold ${headerClass}`}
+              >
                 {secondsLeft}s
               </p>
               <Progress
                 color={timerProgressColor}
                 value={intervalProgressValue}
                 aria-label="round progress"
-                classNames={{ indicator: timerProgressClass, track: timerTrackClass }}
+                classNames={{
+                  indicator: timerProgressClass,
+                  track: timerTrackClass,
+                }}
               />
               <div className="flex gap-2">
                 {phase === "ready" || phase === "done" ? (
-                  <Button className={`w-full ${ctaClass}`} onPress={startSession}>
+                  <Button
+                    className={`w-full ${ctaClass}`}
+                    onPress={startSession}
+                  >
                     start session
                   </Button>
                 ) : (
@@ -652,7 +766,9 @@ export default function Home() {
           </Card>
 
           <Card shadow="sm" className={cardClass}>
-            <CardHeader className={`pb-0 ${sectionTitleClass}`}>session notes</CardHeader>
+            <CardHeader className={`pb-0 ${sectionTitleClass}`}>
+              session notes
+            </CardHeader>
             <CardBody className="gap-3">
               <Input
                 label="effort (1-10)"
@@ -665,20 +781,24 @@ export default function Home() {
                   }
                   const parsed = Number(digitsOnly);
                   if (Number.isNaN(parsed)) return;
-                  setEffort(String(Math.min(MAX_EFFORT, Math.max(MIN_EFFORT, parsed))));
+                  setEffort(
+                    String(Math.min(MAX_EFFORT, Math.max(MIN_EFFORT, parsed))),
+                  );
                 }}
                 type="text"
                 inputMode="numeric"
                 classNames={{
-                  inputWrapper: isDark ? "" : "border border-zinc-300 bg-white/80",
+                  inputWrapper: isDark
+                    ? ""
+                    : "border border-zinc-300 bg-white/80",
                 }}
                 endContent={
                   <div className="flex items-center gap-1">
                     <Button
                       isIconOnly
-                      size="sm"
+                      size="md"
                       variant="flat"
-                      className={resetButtonClass}
+                      className={`${resetButtonClass} w-10 min-w-10 h-10 text-lg`}
                       aria-label="decrease effort"
                       onPress={() => adjustEffort(-1)}
                     >
@@ -686,9 +806,9 @@ export default function Home() {
                     </Button>
                     <Button
                       isIconOnly
-                      size="sm"
+                      size="md"
                       variant="flat"
-                      className={resetButtonClass}
+                      className={`${resetButtonClass} w-10 min-w-10 h-10 text-lg`}
                       aria-label="increase effort"
                       onPress={() => adjustEffort(1)}
                     >
@@ -703,10 +823,16 @@ export default function Home() {
                 onValueChange={setNotes}
                 minRows={3}
                 classNames={{
-                  inputWrapper: isDark ? "" : "border border-zinc-300 bg-white/80",
+                  inputWrapper: isDark
+                    ? ""
+                    : "border border-zinc-300 bg-white/80",
                 }}
               />
-              <Button className={ctaClass} onPress={saveSession}>
+              <Button
+                className={ctaClass}
+                onPress={saveSession}
+                isDisabled={!canSaveSession}
+              >
                 save session
               </Button>
             </CardBody>
@@ -714,7 +840,9 @@ export default function Home() {
         </div>
 
         <Card shadow="sm" className={cardClass}>
-          <CardHeader className={`pb-0 ${sectionTitleClass}`}>recent sessions</CardHeader>
+          <CardHeader className={`pb-0 ${sectionTitleClass}`}>
+            recent sessions
+          </CardHeader>
           <CardBody className="gap-2">
             {logs.length === 0 ? (
               <p className={`text-sm ${subClass}`}>
@@ -729,22 +857,39 @@ export default function Home() {
                       ? "transition-none"
                       : "transition-transform duration-200 ease-out"
                   } ${sessionItemClass}`}
-                  style={{ transform: `translateX(${swipeOffsets[log.id] ?? 0}px)` }}
+                  style={{
+                    transform: `translateX(${swipeOffsets[log.id] ?? 0}px)`,
+                  }}
                   onTouchStart={(event) =>
-                    startSwipe(log.id, event.touches[0].clientX, event.touches[0].clientY)
+                    startSwipe(
+                      log.id,
+                      event.touches[0].clientX,
+                      event.touches[0].clientY,
+                    )
                   }
                   onTouchMove={(event) =>
-                    moveSwipe(log.id, event.touches[0].clientX, event.touches[0].clientY, event)
+                    moveSwipe(
+                      log.id,
+                      event.touches[0].clientX,
+                      event.touches[0].clientY,
+                      event,
+                    )
                   }
                   onTouchEnd={() => endSwipe(log.id)}
                   onTouchCancel={() => endSwipe(log.id)}
                 >
                   <p className={`text-sm font-medium ${sectionTitleClass}`}>
-                    {log.date} • rounds: {log.rounds}/{log.targetRounds || DEFAULT_ROUNDS} • effort: {log.effort || "n/a"}
+                    {normalizeShortDate(log.date)}
+                  </p>
+                  <p className={`text-xs ${subClass}`}>
+                    rounds: {log.rounds}/{log.targetRounds || DEFAULT_ROUNDS} •
+                    effort: {log.effort || "n/a"}
                   </p>
                   <Textarea
                     aria-label={`notes for session ${log.date}`}
-                    value={editingNoteId === log.id ? editingNoteValue : log.notes}
+                    value={
+                      editingNoteId === log.id ? editingNoteValue : log.notes
+                    }
                     onValueChange={(value) => {
                       if (editingNoteId === log.id) {
                         setEditingNoteValue(value);
@@ -763,7 +908,9 @@ export default function Home() {
                     }}
                   />
                   <div className="mt-2 flex items-center justify-between gap-2">
-                    <p className={`text-xs sm:hidden ${subClass}`}>swipe left to remove</p>
+                    <p className={`text-xs sm:hidden ${subClass}`}>
+                      swipe left to remove
+                    </p>
                     <div className="flex items-center gap-2 sm:hidden">
                       {editingNoteId === log.id ? (
                         <>
@@ -775,7 +922,11 @@ export default function Home() {
                           >
                             cancel
                           </Button>
-                          <Button size="sm" className={ctaClass} onPress={saveEditingSessionNote}>
+                          <Button
+                            size="sm"
+                            className={ctaClass}
+                            onPress={saveEditingSessionNote}
+                          >
                             save
                           </Button>
                         </>
@@ -787,7 +938,9 @@ export default function Home() {
                             variant="flat"
                             className={`${resetButtonClass} text-base`}
                             aria-label={`edit session note from ${log.date}`}
-                            onPress={() => startEditingSessionNote(log.id, log.notes)}
+                            onPress={() =>
+                              startEditingSessionNote(log.id, log.notes)
+                            }
                           >
                             ✎
                           </Button>
@@ -795,9 +948,31 @@ export default function Home() {
                       )}
                     </div>
                   </div>
+                  {noteSavedForId === log.id ? (
+                    <motion.div
+                      className="mt-2 flex justify-end"
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.18, ease: "easeOut" }}
+                    >
+                      <Chip
+                        size="sm"
+                        variant="flat"
+                        className={
+                          isDark
+                            ? "bg-emerald-400/15 text-emerald-100 border border-emerald-300/40"
+                            : "bg-emerald-500/15 text-emerald-800 border border-emerald-500/30"
+                        }
+                      >
+                        note saved
+                      </Chip>
+                    </motion.div>
+                  ) : null}
                   {pendingDeleteId === log.id ? (
                     <div className="mt-2 flex items-center justify-end gap-2 sm:hidden">
-                      <span className={`text-xs ${subClass}`}>remove note?</span>
+                      <span className={`text-xs ${subClass}`}>
+                        remove note?
+                      </span>
                       <Button
                         size="sm"
                         variant="solid"
@@ -827,7 +1002,11 @@ export default function Home() {
                         >
                           cancel
                         </Button>
-                        <Button size="sm" className={ctaClass} onPress={saveEditingSessionNote}>
+                        <Button
+                          size="sm"
+                          className={ctaClass}
+                          onPress={saveEditingSessionNote}
+                        >
                           save
                         </Button>
                       </>
@@ -839,7 +1018,9 @@ export default function Home() {
                           variant="flat"
                           className={`${resetButtonClass} text-base`}
                           aria-label={`edit session note from ${log.date}`}
-                          onPress={() => startEditingSessionNote(log.id, log.notes)}
+                          onPress={() =>
+                            startEditingSessionNote(log.id, log.notes)
+                          }
                         >
                           ✎
                         </Button>
