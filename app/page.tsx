@@ -213,9 +213,19 @@ function RecentSessionRow({
           className="mt-2"
           classNames={{
             inputWrapper: isDark
-              ? "border border-zinc-400/80 bg-zinc-700/45 hover:bg-zinc-700/55 data-[hover=true]:bg-zinc-700/55 data-[focus=true]:bg-zinc-700/55"
-              : "border border-zinc-300 bg-zinc-100/70",
-            input: isDark ? "!text-zinc-100 !placeholder:text-zinc-300" : "text-zinc-800",
+              ? `border border-zinc-400/80 bg-zinc-700/45 hover:bg-zinc-700/55 data-[hover=true]:bg-zinc-700/55 data-[focus=true]:bg-zinc-700/55 ${
+                  isEditing ? "" : "pointer-events-none"
+                }`
+              : `border border-zinc-300 bg-zinc-100/70 ${
+                  isEditing ? "" : "pointer-events-none"
+                }`,
+            input: isDark
+              ? `!text-zinc-100 !placeholder:text-zinc-300 ${
+                  isEditing ? "" : "pointer-events-none select-none"
+                }`
+              : `text-zinc-800 ${
+                  isEditing ? "" : "pointer-events-none select-none"
+                }`,
           }}
         />
 
