@@ -12,7 +12,7 @@ import {
   Textarea,
   Tooltip,
 } from "@heroui/react";
-import { motion } from "framer-motion";
+import { animate, motion, useDragControls, useMotionValue } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Phase = "ready" | "sprint" | "rest" | "done";
@@ -89,6 +89,244 @@ function normalizeShortDate(input: string) {
   return value;
 }
 
+function RecentSessionRow({
+  log,
+  isDark,
+  subClass,
+  sectionTitleClass,
+  sessionItemClass,
+  resetButtonClass,
+  cancelButtonClass,
+  ctaClass,
+  deleteButtonClass,
+  editingNoteId,
+  editingNoteValue,
+  noteSavedForId,
+  openSwipeId,
+  setOpenSwipeId,
+  setEditingNoteValue,
+  startEditingSessionNote,
+  cancelEditingSessionNote,
+  saveEditingSessionNote,
+  deleteSession,
+}: {
+  log: SessionLog;
+  isDark: boolean;
+  subClass: string;
+  sectionTitleClass: string;
+  sessionItemClass: string;
+  resetButtonClass: string;
+  cancelButtonClass: string;
+  ctaClass: string;
+  deleteButtonClass: string;
+  editingNoteId: number | null;
+  editingNoteValue: string;
+  noteSavedForId: number | null;
+  openSwipeId: number | null;
+  setOpenSwipeId: (value: number | null) => void;
+  setEditingNoteValue: (value: string) => void;
+  startEditingSessionNote: (id: number, currentNotes: string) => void;
+  cancelEditingSessionNote: () => void;
+  saveEditingSessionNote: () => void;
+  deleteSession: (id: number) => void;
+}) {
+  const dragControls = useDragControls();
+  const x = useMotionValue(0);
+  const [revealed, setRevealed] = useState(false);
+  const isEditing = editingNoteId === log.id;
+
+  useEffect(() => {
+    if (openSwipeId !== log.id && revealed) {
+      setRevealed(false);
+      animate(x, 0, { type: "spring", stiffness: 520, damping: 44 });
+    }
+  }, [openSwipeId, revealed, log.id, x]);
+
+  useEffect(() => {
+    if (isEditing && revealed) {
+      setRevealed(false);
+      setOpenSwipeId(null);
+      animate(x, 0, { type: "spring", stiffness: 520, damping: 44 });
+    }
+  }, [isEditing, revealed, setOpenSwipeId, x]);
+
+  const settleSwipe = () => {
+    const current = x.get();
+    if (current <= -SWIPE_TRIGGER_PX) {
+      setRevealed(true);
+      setOpenSwipeId(log.id);
+      animate(x, SWIPE_MAX_LEFT_PX, { type: "spring", stiffness: 520, damping: 44 });
+      return;
+    }
+    setRevealed(false);
+    if (openSwipeId === log.id) setOpenSwipeId(null);
+    animate(x, 0, { type: "spring", stiffness: 520, damping: 44 });
+  };
+
+  return (
+    <div className="relative overflow-hidden rounded-xl">
+      {/* behind layer (revealed by swipe) */}
+      <div className="absolute inset-y-0 right-0 flex items-center justify-end pr-2">
+        <Button
+          size="sm"
+          className={`bg-rose-500 text-white hover:bg-rose-600 ${revealed ? "" : "opacity-0"}`}
+          onPress={() => deleteSession(log.id)}
+          aria-label={`remove session from ${log.date}`}
+        >
+          remove
+        </Button>
+      </div>
+
+      {/* front layer */}
+      <motion.div
+        className={`rounded-xl p-3 will-change-transform ${sessionItemClass}`}
+        style={{ x, touchAction: "pan-y" }}
+        drag={isEditing ? false : "x"}
+        dragControls={dragControls}
+        dragListener={false}
+        dragConstraints={{ left: SWIPE_MAX_LEFT_PX, right: 0 }}
+        dragElastic={0.06}
+        dragMomentum
+        dragDirectionLock
+        dragTransition={{ bounceStiffness: 700, bounceDamping: 42 }}
+        onDragStart={() => setOpenSwipeId(log.id)}
+        onDragEnd={settleSwipe}
+      >
+        <div
+          className="select-none"
+          onPointerDown={(event) => {
+            if (isEditing) return;
+            dragControls.start(event as unknown as PointerEvent);
+          }}
+        >
+          <p className={`text-sm font-medium ${sectionTitleClass}`}>
+            {normalizeShortDate(log.date)}
+          </p>
+          <p className={`text-xs ${subClass}`}>
+            rounds: {log.rounds}/{log.targetRounds || DEFAULT_ROUNDS} • effort:{" "}
+            {log.effort || "n/a"}
+          </p>
+        </div>
+
+        <Textarea
+          aria-label={`notes for session ${log.date}`}
+          value={isEditing ? editingNoteValue : log.notes}
+          onValueChange={(value) => {
+            if (isEditing) setEditingNoteValue(value);
+          }}
+          isReadOnly={!isEditing}
+          minRows={2}
+          className="mt-2"
+          classNames={{
+            inputWrapper: isDark
+              ? "border border-zinc-400/80 bg-zinc-700/45 hover:bg-zinc-700/55 data-[hover=true]:bg-zinc-700/55 data-[focus=true]:bg-zinc-700/55"
+              : "border border-zinc-300 bg-zinc-100/70",
+            input: isDark ? "!text-zinc-100 !placeholder:text-zinc-300" : "text-zinc-800",
+          }}
+        />
+
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <div className="flex items-center gap-2 sm:hidden">
+            {isEditing ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  className={cancelButtonClass}
+                  onPress={cancelEditingSessionNote}
+                >
+                  cancel
+                </Button>
+                <Button size="sm" className={ctaClass} onPress={saveEditingSessionNote}>
+                  save
+                </Button>
+              </>
+            ) : (
+              <Tooltip content="edit note">
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="flat"
+                  className={`${resetButtonClass} text-base`}
+                  aria-label={`edit session note from ${log.date}`}
+                  onPress={() => startEditingSessionNote(log.id, log.notes)}
+                >
+                  ✎
+                </Button>
+              </Tooltip>
+            )}
+          </div>
+        </div>
+
+        {noteSavedForId === log.id ? (
+          <motion.div
+            className="mt-2 flex justify-end"
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+          >
+            <Chip
+              size="sm"
+              variant="flat"
+              className={
+                isDark
+                  ? "bg-emerald-400/15 text-emerald-100 border border-emerald-300/40"
+                  : "bg-emerald-500/15 text-emerald-800 border border-emerald-500/30"
+              }
+            >
+              note saved
+            </Chip>
+          </motion.div>
+        ) : null}
+
+        <div className="mt-2 hidden items-center justify-end gap-2 sm:flex">
+          {isEditing ? (
+            <>
+              <Button
+                size="sm"
+                variant="flat"
+                className={cancelButtonClass}
+                onPress={cancelEditingSessionNote}
+              >
+                cancel
+              </Button>
+              <Button size="sm" className={ctaClass} onPress={saveEditingSessionNote}>
+                save
+              </Button>
+            </>
+          ) : (
+            <Tooltip content="edit note">
+              <Button
+                isIconOnly
+                size="sm"
+                variant="flat"
+                className={`${resetButtonClass} text-base`}
+                aria-label={`edit session note from ${log.date}`}
+                onPress={() => startEditingSessionNote(log.id, log.notes)}
+              >
+                ✎
+              </Button>
+            </Tooltip>
+          )}
+          <Tooltip content="remove session">
+            <Button
+              isIconOnly
+              size="sm"
+              color="danger"
+              variant="flat"
+              className={deleteButtonClass}
+              aria-label={`remove session from ${log.date}`}
+              onPress={() => deleteSession(log.id)}
+            >
+              🗑
+            </Button>
+          </Tooltip>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 export default function Home() {
   // keep the first render deterministic to avoid hydration mismatches
   // (server HTML must match the browser's first render).
@@ -108,26 +346,11 @@ export default function Home() {
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editingNoteValue, setEditingNoteValue] = useState("");
   const [noteSavedForId, setNoteSavedForId] = useState<number | null>(null);
+  const [recentToast, setRecentToast] = useState<string>("");
   const [todayLabel, setTodayLabel] = useState("");
-  const [swipeOffsets, setSwipeOffsets] = useState<Record<number, number>>({});
-  const [activeSwipeId, setActiveSwipeId] = useState<number | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [openSwipeId, setOpenSwipeId] = useState<number | null>(null);
   const noteSavedTimerRef = useRef<number | null>(null);
-  const swipeRef = useRef<{
-    id: number | null;
-    startX: number;
-    startY: number;
-    horizontalLocked: boolean;
-    pendingOffset: number;
-    rafId: number | null;
-  }>({
-    id: null,
-    startX: 0,
-    startY: 0,
-    horizontalLocked: false,
-    pendingOffset: 0,
-    rafId: null,
-  });
+  const recentToastTimerRef = useRef<number | null>(null);
 
   const currentRest = Number(restSeconds) || 90;
   const intervalTotalSeconds = phase === "rest" ? currentRest : SPRINT_SECONDS;
@@ -213,7 +436,8 @@ export default function Home() {
           logs?: unknown;
         };
 
-        if (typeof parsed.isDark !== "undefined") setIsDark(Boolean(parsed.isDark));
+        if (typeof parsed.isDark !== "undefined")
+          setIsDark(Boolean(parsed.isDark));
 
         const rawRest =
           typeof parsed.restSeconds === "string"
@@ -223,7 +447,9 @@ export default function Home() {
         if (digits) {
           const n = Number(digits);
           if (!Number.isNaN(n)) {
-            setRestSeconds(String(Math.min(MAX_REST_SECONDS, Math.max(MIN_REST_SECONDS, n))));
+            setRestSeconds(
+              String(Math.min(MAX_REST_SECONDS, Math.max(MIN_REST_SECONDS, n))),
+            );
           }
         }
 
@@ -343,7 +569,6 @@ export default function Home() {
   const cancelButtonClass = isDark
     ? "bg-zinc-600/70 !text-zinc-100 hover:bg-zinc-500"
     : "bg-zinc-200 text-zinc-700 hover:bg-zinc-300";
-  const confirmDeleteClass = "bg-rose-500 text-white hover:bg-rose-600 !border-none";
   const timerProgressColor = "default";
   const timerProgressClass = isDark ? "bg-zinc-300" : "bg-zinc-500";
   const timerTrackClass = isDark ? "bg-zinc-700/70" : "";
@@ -358,7 +583,7 @@ export default function Home() {
           : "bg-[oklch(0.8467_0.1011_58.24/0.3)] text-zinc-900 border border-[oklch(0.72_0.09_58.24/0.6)]"
         : isDark
           ? "bg-zinc-600/55 text-zinc-100 border border-zinc-300/50"
-        : "bg-zinc-200 text-zinc-800 border border-zinc-400/80";
+          : "bg-zinc-200 text-zinc-800 border border-zinc-400/80";
 
   const canSaveSession = effort.trim().length > 0 || notes.trim().length > 0;
 
@@ -439,82 +664,16 @@ export default function Home() {
       setEditingNoteId(null);
       setEditingNoteValue("");
     }
-    setPendingDeleteId((prev) => (prev === id ? null : prev));
-  };
+    setOpenSwipeId((prev) => (prev === id ? null : prev));
 
-  const startSwipe = (id: number, clientX: number, clientY: number) => {
-    if (swipeRef.current.rafId !== null) {
-      window.cancelAnimationFrame(swipeRef.current.rafId);
+    setRecentToast("note removed");
+    if (recentToastTimerRef.current !== null) {
+      window.clearTimeout(recentToastTimerRef.current);
     }
-    swipeRef.current = {
-      id,
-      startX: clientX,
-      startY: clientY,
-      horizontalLocked: false,
-      pendingOffset: 0,
-      rafId: null,
-    };
-    setActiveSwipeId(id);
-    setSwipeOffsets((prev) => ({ ...prev, [id]: 0 }));
-  };
-
-  const moveSwipe = (
-    id: number,
-    clientX: number,
-    clientY: number,
-    event: React.TouchEvent<HTMLDivElement>,
-  ) => {
-    const swipe = swipeRef.current;
-    if (swipe.id !== id) return;
-
-    const deltaX = clientX - swipe.startX;
-    const deltaY = clientY - swipe.startY;
-
-    if (!swipe.horizontalLocked) {
-      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > Math.abs(deltaX)) {
-        setActiveSwipeId(null);
-        swipeRef.current.id = null;
-        return;
-      }
-      if (Math.abs(deltaX) < 8) return;
-      swipe.horizontalLocked = true;
-    }
-
-    if (event.cancelable) event.preventDefault();
-    swipe.pendingOffset = Math.max(SWIPE_MAX_LEFT_PX, Math.min(0, deltaX));
-
-    if (swipe.rafId === null) {
-      swipe.rafId = window.requestAnimationFrame(() => {
-        const nextOffset = swipeRef.current.pendingOffset;
-        setSwipeOffsets((prev) => ({ ...prev, [id]: nextOffset }));
-        swipeRef.current.rafId = null;
-      });
-    }
-  };
-
-  const endSwipe = (id: number) => {
-    const swipe = swipeRef.current;
-    if (swipe.id !== id) return;
-
-    if (swipe.rafId !== null) {
-      window.cancelAnimationFrame(swipe.rafId);
-      swipe.rafId = null;
-    }
-
-    const offset = swipe.pendingOffset;
-    if (offset <= -SWIPE_TRIGGER_PX) {
-      setPendingDeleteId(id);
-    }
-    setSwipeOffsets((prev) => ({ ...prev, [id]: 0 }));
-    setActiveSwipeId(null);
-    swipeRef.current = {
-      id: null,
-      startX: 0,
-      startY: 0,
-      horizontalLocked: false,
-      pendingOffset: 0,
-      rafId: null,
-    };
+    recentToastTimerRef.current = window.setTimeout(() => {
+      setRecentToast("");
+      recentToastTimerRef.current = null;
+    }, 1600);
   };
 
   const adjustRestSeconds = (delta: number) => {
@@ -557,7 +716,7 @@ export default function Home() {
             size="sm"
             classNames={{
               wrapper: isDark
-                ? "border border-zinc-400/80 bg-zinc-700 group-data-[selected=true]:bg-[#7ef55a]"
+                ? "border border-zinc-200/80 bg-white group-data-[selected=true]:bg-white"
                 : "border border-zinc-500 bg-white group-data-[selected=true]:bg-[#7ef55a]",
               thumb:
                 "bg-zinc-900 w-4 h-4 min-w-4 min-h-4 rounded-full shadow-none",
@@ -839,213 +998,64 @@ export default function Home() {
           </Card>
         </div>
 
-        <Card shadow="sm" className={cardClass}>
-          <CardHeader className={`pb-0 ${sectionTitleClass}`}>
-            recent sessions
-          </CardHeader>
-          <CardBody className="gap-2">
-            {logs.length === 0 ? (
-              <p className={`text-sm ${subClass}`}>
-                your saved treadmill sessions will show up here.
-              </p>
-            ) : (
-              logs.map((log) => (
-                <div
-                  key={log.id}
-                  className={`rounded-xl p-3 will-change-transform ${
-                    activeSwipeId === log.id
-                      ? "transition-none"
-                      : "transition-transform duration-200 ease-out"
-                  } ${sessionItemClass}`}
-                  style={{
-                    transform: `translateX(${swipeOffsets[log.id] ?? 0}px)`,
-                  }}
-                  onTouchStart={(event) =>
-                    startSwipe(
-                      log.id,
-                      event.touches[0].clientX,
-                      event.touches[0].clientY,
-                    )
-                  }
-                  onTouchMove={(event) =>
-                    moveSwipe(
-                      log.id,
-                      event.touches[0].clientX,
-                      event.touches[0].clientY,
-                      event,
-                    )
-                  }
-                  onTouchEnd={() => endSwipe(log.id)}
-                  onTouchCancel={() => endSwipe(log.id)}
+          <Card shadow="sm" className={cardClass}>
+            <CardHeader className={`pb-0 ${sectionTitleClass}`}>
+              recent sessions
+            </CardHeader>
+            <CardBody className="gap-2">
+              {recentToast ? (
+                <motion.div
+                  className="flex justify-end"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
                 >
-                  <p className={`text-sm font-medium ${sectionTitleClass}`}>
-                    {normalizeShortDate(log.date)}
-                  </p>
-                  <p className={`text-xs ${subClass}`}>
-                    rounds: {log.rounds}/{log.targetRounds || DEFAULT_ROUNDS} •
-                    effort: {log.effort || "n/a"}
-                  </p>
-                  <Textarea
-                    aria-label={`notes for session ${log.date}`}
-                    value={
-                      editingNoteId === log.id ? editingNoteValue : log.notes
+                  <Chip
+                    size="sm"
+                    variant="flat"
+                    className={
+                      isDark
+                        ? "bg-rose-400/15 text-rose-100 border border-rose-300/40"
+                        : "bg-rose-500/15 text-rose-800 border border-rose-500/30"
                     }
-                    onValueChange={(value) => {
-                      if (editingNoteId === log.id) {
-                        setEditingNoteValue(value);
-                      }
-                    }}
-                    isReadOnly={editingNoteId !== log.id}
-                    minRows={2}
-                    className="mt-2"
-                    classNames={{
-                      inputWrapper: isDark
-                        ? "border border-zinc-400/80 bg-zinc-700/45 hover:bg-zinc-700/55 data-[hover=true]:bg-zinc-700/55 data-[focus=true]:bg-zinc-700/55"
-                        : "border border-zinc-300 bg-zinc-100/70",
-                      input: isDark
-                        ? "!text-zinc-100 !placeholder:text-zinc-300"
-                        : "text-zinc-800",
-                    }}
-                  />
-                  <div className="mt-2 flex items-center justify-between gap-2">
-                    <p className={`text-xs sm:hidden ${subClass}`}>
-                      swipe left to remove
-                    </p>
-                    <div className="flex items-center gap-2 sm:hidden">
-                      {editingNoteId === log.id ? (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="flat"
-                            className={cancelButtonClass}
-                            onPress={cancelEditingSessionNote}
-                          >
-                            cancel
-                          </Button>
-                          <Button
-                            size="sm"
-                            className={ctaClass}
-                            onPress={saveEditingSessionNote}
-                          >
-                            save
-                          </Button>
-                        </>
-                      ) : (
-                        <Tooltip content="edit note">
-                          <Button
-                            isIconOnly
-                            size="sm"
-                            variant="flat"
-                            className={`${resetButtonClass} text-base`}
-                            aria-label={`edit session note from ${log.date}`}
-                            onPress={() =>
-                              startEditingSessionNote(log.id, log.notes)
-                            }
-                          >
-                            ✎
-                          </Button>
-                        </Tooltip>
-                      )}
-                    </div>
-                  </div>
-                  {noteSavedForId === log.id ? (
-                    <motion.div
-                      className="mt-2 flex justify-end"
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.18, ease: "easeOut" }}
-                    >
-                      <Chip
-                        size="sm"
-                        variant="flat"
-                        className={
-                          isDark
-                            ? "bg-emerald-400/15 text-emerald-100 border border-emerald-300/40"
-                            : "bg-emerald-500/15 text-emerald-800 border border-emerald-500/30"
-                        }
-                      >
-                        note saved
-                      </Chip>
-                    </motion.div>
-                  ) : null}
-                  {pendingDeleteId === log.id ? (
-                    <div className="mt-2 flex items-center justify-end gap-2 sm:hidden">
-                      <span className={`text-xs ${subClass}`}>
-                        remove note?
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="solid"
-                        className={confirmDeleteClass}
-                        onPress={() => deleteSession(log.id)}
-                      >
-                        yes
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="flat"
-                        className={cancelButtonClass}
-                        onPress={() => setPendingDeleteId(null)}
-                      >
-                        no
-                      </Button>
-                    </div>
-                  ) : null}
-                  <div className="mt-2 hidden items-center justify-end gap-2 sm:flex">
-                    {editingNoteId === log.id ? (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="flat"
-                          className={cancelButtonClass}
-                          onPress={cancelEditingSessionNote}
-                        >
-                          cancel
-                        </Button>
-                        <Button
-                          size="sm"
-                          className={ctaClass}
-                          onPress={saveEditingSessionNote}
-                        >
-                          save
-                        </Button>
-                      </>
-                    ) : (
-                      <Tooltip content="edit note">
-                        <Button
-                          isIconOnly
-                          size="sm"
-                          variant="flat"
-                          className={`${resetButtonClass} text-base`}
-                          aria-label={`edit session note from ${log.date}`}
-                          onPress={() =>
-                            startEditingSessionNote(log.id, log.notes)
-                          }
-                        >
-                          ✎
-                        </Button>
-                      </Tooltip>
-                    )}
-                    <Tooltip content="remove session">
-                      <Button
-                        isIconOnly
-                        size="sm"
-                        color="danger"
-                        variant="flat"
-                        className={deleteButtonClass}
-                        aria-label={`remove session from ${log.date}`}
-                        onPress={() => deleteSession(log.id)}
-                      >
-                        🗑
-                      </Button>
-                    </Tooltip>
-                  </div>
-                </div>
-              ))
-            )}
-          </CardBody>
-        </Card>
-      </motion.div>
+                  >
+                    {recentToast}
+                  </Chip>
+                </motion.div>
+              ) : null}
+	              {logs.length === 0 ? (
+	                <p className={`text-sm ${subClass}`}>
+	                  your saved treadmill sessions will show up here.
+	                </p>
+	              ) : (
+	                logs.map((log) => (
+	                  <RecentSessionRow
+	                    key={log.id}
+	                    log={log}
+	                    isDark={isDark}
+	                    subClass={subClass}
+	                    sectionTitleClass={sectionTitleClass}
+	                    sessionItemClass={sessionItemClass}
+	                    resetButtonClass={resetButtonClass}
+	                    cancelButtonClass={cancelButtonClass}
+	                    ctaClass={ctaClass}
+	                    deleteButtonClass={deleteButtonClass}
+	                    editingNoteId={editingNoteId}
+	                    editingNoteValue={editingNoteValue}
+	                    noteSavedForId={noteSavedForId}
+	                    openSwipeId={openSwipeId}
+	                    setOpenSwipeId={setOpenSwipeId}
+	                    setEditingNoteValue={setEditingNoteValue}
+	                    startEditingSessionNote={startEditingSessionNote}
+	                    cancelEditingSessionNote={cancelEditingSessionNote}
+	                    saveEditingSessionNote={saveEditingSessionNote}
+	                    deleteSession={deleteSession}
+	                  />
+	                ))
+	              )}
+	            </CardBody>
+	          </Card>
+	        </motion.div>
     </div>
   );
 }
