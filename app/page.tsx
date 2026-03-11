@@ -12,7 +12,7 @@ import {
   Textarea,
   Tooltip,
 } from "@heroui/react";
-import { animate, motion, useDragControls, useMotionValue } from "framer-motion";
+import { animate, motion, useMotionValue } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Phase = "ready" | "sprint" | "rest" | "done";
@@ -130,7 +130,6 @@ function RecentSessionRow({
   saveEditingSessionNote: () => void;
   deleteSession: (id: number) => void;
 }) {
-  const dragControls = useDragControls();
   const x = useMotionValue(0);
   const [revealed, setRevealed] = useState(false);
   const isEditing = editingNoteId === log.id;
@@ -169,7 +168,9 @@ function RecentSessionRow({
       <div className="absolute inset-y-0 right-0 flex items-center justify-end pr-2">
         <Button
           size="sm"
-          className={`bg-rose-500 text-white hover:bg-rose-600 ${revealed ? "" : "opacity-0"}`}
+          className={`bg-rose-500 text-white hover:bg-rose-600 ${
+            revealed ? "" : "opacity-0 pointer-events-none"
+          }`}
           onPress={() => deleteSession(log.id)}
           aria-label={`remove session from ${log.date}`}
         >
@@ -182,8 +183,7 @@ function RecentSessionRow({
         className={`rounded-xl p-3 will-change-transform ${sessionItemClass}`}
         style={{ x, touchAction: "pan-y" }}
         drag={isEditing ? false : "x"}
-        dragControls={dragControls}
-        dragListener={false}
+        dragListener={!isEditing}
         dragConstraints={{ left: SWIPE_MAX_LEFT_PX, right: 0 }}
         dragElastic={0.06}
         dragMomentum
@@ -192,13 +192,7 @@ function RecentSessionRow({
         onDragStart={() => setOpenSwipeId(log.id)}
         onDragEnd={settleSwipe}
       >
-        <div
-          className="select-none"
-          onPointerDown={(event) => {
-            if (isEditing) return;
-            dragControls.start(event as unknown as PointerEvent);
-          }}
-        >
+        <div className="select-none">
           <p className={`text-sm font-medium ${sectionTitleClass}`}>
             {normalizeShortDate(log.date)}
           </p>
